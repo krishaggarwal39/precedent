@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/precedent-cli/precedent/internal/config"
@@ -31,29 +30,33 @@ func (y *YamlAdapter) IsInstalled() bool {
 func (y *YamlAdapter) Run(ctx context.Context, workDir string, taskPrompt string, task types.Task) (*AgentResult, error) {
 	start := time.Now()
 
-	// Substitute placeholders
-	cmdStr := strings.ReplaceAll(y.Config.Command, "{{PROMPT}}", taskPrompt)
-	cmdStr = strings.ReplaceAll(cmdStr, "{{WORKTREE}}", workDir)
+	// Substitute placeholders securely in the shell string
+	cmdStr := strings.ReplaceAll(y.Config.Command, "{{PROMPT}}", "\"$PRECEDENT_PROMPT\"")
+	cmdStr = strings.ReplaceAll(cmdStr, "{{WORKTREE}}", "\"$PRECEDENT_WORKTREE\"")
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
 	cmd.Dir = workDir
 
-	// Inject custom environment variables
+	// Inject environment variables safely
 	cmd.Env = os.Environ()
+	cmd.Env = append(cmd.Env, fmt.Sprintf("PRECEDENT_PROMPT=%s", taskPrompt))
+	cmd.Env = append(cmd.Env, fmt.Sprintf("PRECEDENT_WORKTREE=%s", workDir))
 	for _, e := range y.Config.Env {
 		envStr := strings.ReplaceAll(e, "{{WORKTREE}}", workDir)
+		envStr = strings.ReplaceAll(envStr, "{{PROMPT}}", taskPrompt)
 		cmd.Env = append(cmd.Env, envStr)
 	}
 
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureProcAttr(cmd)
+	cmd.Cancel = func() error {
+		return killProcessGroup(cmd)
+	}
+	cmd.WaitDelay = 10 * time.Second
 
 	out, err := cmd.CombinedOutput()
 	duration := time.Since(start)
 
 	if err != nil {
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
 		return &AgentResult{
 			Duration: duration,
 			Error:    fmt.Errorf("agent '%s' failed: %v\nOutput: %s", y.AgentName, err, out),

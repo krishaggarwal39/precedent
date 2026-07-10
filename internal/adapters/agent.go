@@ -13,6 +13,7 @@ type AgentResult struct {
 	TotalTokens int
 	Duration    time.Duration
 	Error       error
+	Unverified  bool
 }
 
 // AgentAdapter defines the interface for interacting with different AI coding agents.

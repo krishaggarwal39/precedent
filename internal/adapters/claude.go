@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"syscall"
 	"time"
 
 	"github.com/precedent-cli/precedent/internal/types"
@@ -12,6 +11,10 @@ import (
 
 // ClaudeAdapter integrates with the anthropic claude-code CLI.
 type ClaudeAdapter struct{}
+
+func init() {
+	Register("claude", func() AgentAdapter { return &ClaudeAdapter{} })
+}
 
 func (c *ClaudeAdapter) Name() string {
 	return "claude-code"
@@ -32,7 +35,11 @@ func (c *ClaudeAdapter) Run(ctx context.Context, workDir string, taskPrompt stri
 	cmd.Dir = workDir
 
 	// Create a new process group so we can reliably kill it and its children
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureProcAttr(cmd)
+	cmd.Cancel = func() error {
+		return killProcessGroup(cmd)
+	}
+	cmd.WaitDelay = 10 * time.Second
 
 	// We don't pipe stdout/stderr to terminal because this runs concurrently
 	// But we should capture it for the result.
@@ -40,10 +47,6 @@ func (c *ClaudeAdapter) Run(ctx context.Context, workDir string, taskPrompt stri
 	duration := time.Since(start)
 
 	if err != nil {
-		// Cleanly kill the process group if it timed out or failed
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
 		return &AgentResult{
 			Duration: duration,
 			Error:    fmt.Errorf("claude execution failed: %v (output: %s)", err, out),

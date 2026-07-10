@@ -8,8 +8,12 @@ import (
 	"github.com/precedent-cli/precedent/internal/types"
 )
 
-// DummyAdapter is a mock agent used for testing the pipeline without incurring LLM costs.
+// DummyAdapter provides a fake successful run for testing without making real AI calls.
 type DummyAdapter struct{}
+
+func init() {
+	Register("dummy", func() AgentAdapter { return &DummyAdapter{} })
+}
 
 func (d *DummyAdapter) Name() string {
 	return "dummy-agent"
