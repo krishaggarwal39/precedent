@@ -104,6 +104,8 @@ func (e *Engine) Run(ctx context.Context, tasks []types.Task) (<-chan Event, []*
 					if err != nil {
 						result.Error = fmt.Errorf("Test failed: %v\nOutput: %s", err, string(out))
 					}
+				} else if result.Error == nil && e.cfg.TestCommand == "" {
+					result.Unverified = true
 				}
 
 				resMu.Lock()

@@ -17,14 +17,14 @@ import (
 
 // mockAdapter simulates different agent behaviors.
 type mockAdapter struct {
-	mu           sync.Mutex
-	delay        time.Duration
-	err          error
-	returnNil    bool
-	costPerTask  float64
+	mu          sync.Mutex
+	delay       time.Duration
+	err         error
+	returnNil   bool
+	costPerTask float64
 }
 
-func (m *mockAdapter) Name() string { return "mock" }
+func (m *mockAdapter) Name() string      { return "mock" }
 func (m *mockAdapter) IsInstalled() bool { return true }
 func (m *mockAdapter) Run(ctx context.Context, workDir string, taskPrompt string, task types.Task) (*adapters.AgentResult, error) {
 	m.mu.Lock()
@@ -69,10 +69,10 @@ func createTestRepo(t *testing.T) (string, string) {
 	runGit("init")
 	runGit("config", "user.name", "Test User")
 	runGit("config", "user.email", "test@example.com")
-	
+
 	f, _ := os.Create(filepath.Join(repoPath, "README.md"))
 	f.Close()
-	
+
 	runGit("add", "README.md")
 	runGit("commit", "-m", "initial commit")
 
@@ -160,7 +160,7 @@ func TestEngine_Timeout(t *testing.T) {
 
 func TestEngine_BudgetExceeded(t *testing.T) {
 	repo, commit := createTestRepo(t)
-	// 5 tasks, each costs 1.0. Max cost is 1.5. 
+	// 5 tasks, each costs 1.0. Max cost is 1.5.
 	// At most 2 tasks should complete before the budget exceeds and the rest are cancelled.
 	var tasks []types.Task
 	for i := 0; i < 5; i++ {
