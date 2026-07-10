@@ -9,8 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
+	"github.com/precedent-cli/precedent/internal/runner"
 	"github.com/precedent-cli/precedent/internal/types"
 )
 
@@ -70,21 +70,16 @@ func (m *TaskMiner) getPatch(ctx context.Context, commitHash string, files []str
 // and the head commit PASSES the tests.
 func (m *TaskMiner) verifyFailToPass(ctx context.Context, headCommit, baseCommit string, testFiles []string) bool {
 	// Safety: Create a temporary worktree so we don't mess up the user's active workspace
-	wtDir := filepath.Join(m.RepoPath, ".precedent", "validation_wt")
-	_ = os.RemoveAll(wtDir) // Ensure clean state
-
-	// Add worktree at BaseCommit
-	addCmd := exec.CommandContext(ctx, "git", "worktree", "add", "--detach", wtDir, baseCommit)
-	addCmd.Dir = m.RepoPath
-	if err := addCmd.Run(); err != nil {
-		return false // if we can't checkout, it's invalid
+	wtDir, err := os.MkdirTemp("", "precedent-val-*")
+	if err != nil {
+		return false
 	}
-	defer func() {
-		rmCmd := exec.CommandContext(context.Background(), "git", "worktree", "remove", "--force", wtDir)
-		rmCmd.Dir = m.RepoPath
-		_ = rmCmd.Run()
-		_ = os.RemoveAll(wtDir)
-	}()
+
+	isolation := runner.NewGitIsolation(m.RepoPath, wtDir, baseCommit)
+	if err := isolation.Setup(ctx); err != nil {
+		return false
+	}
+	defer isolation.Teardown(context.Background())
 
 	// 1. Test BaseCommit (Must Fail)
 	testBase := exec.CommandContext(ctx, "sh", "-c", m.TestCommand)
@@ -112,7 +107,7 @@ func (m *TaskMiner) verifyFailToPass(ctx context.Context, headCommit, baseCommit
 }
 
 func (m *TaskMiner) Mine(ctx context.Context) ([]types.Task, error) {
-	cmd := exec.CommandContext(ctx, "git", "log", "--pretty=format:COMMIT|%H|%an|%s", "--name-only", "--no-merges")
+	cmd := exec.CommandContext(ctx, "git", "log", "--pretty=format:COMMIT%x00%H%x00%an%x00%s%x00", "--name-only", "--no-merges", "-z")
 	cmd.Dir = m.RepoPath
 
 	stdout, err := cmd.StdoutPipe()
@@ -125,8 +120,20 @@ func (m *TaskMiner) Mine(ctx context.Context) ([]types.Task, error) {
 	}
 
 	scanner := bufio.NewScanner(stdout)
-	var tasks []types.Task
+	scanner.Split(func(data []byte, atEOF bool) (advance int, token []byte, err error) {
+		if atEOF && len(data) == 0 {
+			return 0, nil, nil
+		}
+		if i := strings.IndexByte(string(data), 0); i >= 0 {
+			return i + 1, data[0:i], nil
+		}
+		if atEOF {
+			return len(data), data, nil
+		}
+		return 0, nil, nil
+	})
 
+	var tasks []types.Task
 	var currHash, currAuthor, currSubject string
 	var currSrcFiles, currTestFiles []string
 
@@ -139,7 +146,6 @@ func (m *TaskMiner) Mine(ctx context.Context) ([]types.Task, error) {
 			baseCommit := currHash + "~1"
 
 			if !m.Relaxed {
-				// 🚨 Strict Benchmark Integrity: Fail-to-Pass Validation
 				fmt.Printf("🔍 Validating candidate task %s with '%s' (Fail-to-Pass check)...\n", currHash[:7], m.TestCommand)
 				if !m.verifyFailToPass(ctx, currHash, baseCommit, currTestFiles) {
 					fmt.Printf("❌ Discarded %s: Did not meet Fail-to-Pass criteria.\n", currHash[:7])
@@ -163,51 +169,62 @@ func (m *TaskMiner) Mine(ctx context.Context) ([]types.Task, error) {
 				Repo:             repoName,
 				Patch:            srcPatch,
 				TestPatch:        testPatch,
-				TestCommand:      m.TestCommand,
 			})
 		}
 	}
 
+	state := 0 // 0=expect COMMIT, 1=hash, 2=author, 3=subject, 4=files
 	for scanner.Scan() {
-		line := scanner.Text()
+		token := scanner.Text()
 
-		if strings.HasPrefix(line, "COMMIT|") {
-			processCommit()
-
-			if m.MaxTasks > 0 && len(tasks) >= m.MaxTasks {
-				break
+		if state == 0 {
+			if token == "COMMIT" {
+				processCommit()
+				if m.MaxTasks > 0 && len(tasks) >= m.MaxTasks {
+					break
+				}
+				currHash, currAuthor, currSubject = "", "", ""
+				currSrcFiles, currTestFiles = nil, nil
+				state = 1
 			}
+			continue
+		}
 
-			parts := strings.SplitN(line, "|", 4)
-			if len(parts) >= 4 {
-				currHash = parts[1]
-				currAuthor = parts[2]
-				currSubject = strings.TrimSpace(parts[3])
-				currSrcFiles = nil
-				currTestFiles = nil
-			} else {
-				currHash = ""
+		switch state {
+		case 1:
+			currHash = token
+			state = 2
+		case 2:
+			currAuthor = token
+			state = 3
+		case 3:
+			currSubject = token
+			state = 4
+		case 4:
+			if token == "" {
+				state = 0 // End of file list
+				continue
 			}
-		} else if line != "" && currHash != "" {
-			if isTestFile(line) {
-				currTestFiles = append(currTestFiles, line)
+			filename := strings.TrimPrefix(token, "\n")
+			if filename == "" {
+				continue
+			}
+			if isTestFile(filename) {
+				currTestFiles = append(currTestFiles, filename)
 			} else {
-				currSrcFiles = append(currSrcFiles, line)
+				currSrcFiles = append(currSrcFiles, filename)
 			}
 		}
 	}
 	processCommit()
 
 	if err := cmd.Wait(); err != nil {
-		if m.MaxTasks > 0 && len(tasks) >= m.MaxTasks {
-			goto Finish
+		if m.MaxTasks <= 0 || len(tasks) < m.MaxTasks {
+			return nil, fmt.Errorf("git log failed: %w", err)
 		}
-		return nil, fmt.Errorf("git log failed: %w", err)
 	}
 
-Finish:
 	// Randomize task order to prevent execution caching bias
-	rand.Seed(time.Now().UnixNano())
 	rand.Shuffle(len(tasks), func(i, j int) {
 		tasks[i], tasks[j] = tasks[j], tasks[i]
 	})
