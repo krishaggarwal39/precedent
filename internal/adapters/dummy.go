@@ -21,7 +21,7 @@ func (d *DummyAdapter) IsInstalled() bool {
 
 func (d *DummyAdapter) Run(ctx context.Context, workDir string, taskPrompt string, task types.Task) (*AgentResult, error) {
 	fmt.Printf("[DummyAgent] Executing task %s in %s\n", task.InstanceID, workDir)
-	
+
 	// Simulate work
 	select {
 	case <-time.After(2 * time.Second):
