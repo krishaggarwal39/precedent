@@ -52,15 +52,19 @@ func TestGenerateScorecard_Golden(t *testing.T) {
 		"task-skipped",
 		"$0.10",
 		"250",
-		"PASS",
-		"FAIL",
-		"UNVERIFIED",
-		"SKIPPED",
+		"pass",
+		"fail",
+		"unverified",
+		"skipped",
 	}
 
 	for _, sub := range expectedSubstrings {
 		if !strings.Contains(outStr, sub) {
 			t.Errorf("Scorecard is missing expected substring: %q", sub)
 		}
+	}
+
+	if strings.Contains(outStr, "http://") || strings.Contains(outStr, "https://") {
+		t.Errorf("Scorecard contains external resources (http/https). It must be offline-safe.")
 	}
 }

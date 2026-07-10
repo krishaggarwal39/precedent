@@ -19,10 +19,9 @@ type ScorecardData struct {
 }
 
 type TaskResult struct {
-	Task        types.Task
-	Result      *adapters.AgentResult
-	Status      string
-	StatusColor string
+	Task   types.Task
+	Result *adapters.AgentResult
+	Status string
 }
 
 const htmlTemplate = `<!DOCTYPE html>
@@ -31,83 +30,218 @@ const htmlTemplate = `<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Precedent Benchmark Scorecard</title>
-    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
         body {
-            font-family: 'Inter', sans-serif;
+            font-family: system-ui, -apple-system, sans-serif;
             background-color: #0f172a;
             color: #f8fafc;
+            margin: 0;
+            padding: 2rem;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 72rem;
+            margin: 0 auto;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2.5rem;
+        }
+        .title {
+            font-size: 2.25rem;
+            font-weight: 700;
+            margin: 0;
+            background: linear-gradient(to right, #38bdf8, #6366f1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.025em;
+        }
+        .subtitle {
+            color: #94a3b8;
+            margin-top: 0.5rem;
+            font-size: 0.875rem;
         }
         .glass {
             background: rgba(30, 41, 59, 0.7);
             backdrop-filter: blur(10px);
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
-        .glow {
+        .status-badge {
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: #cbd5e1;
+        }
+        .pulse {
+            width: 0.5rem;
+            height: 0.5rem;
+            border-radius: 9999px;
+            background-color: #34d399;
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .5; }
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(1, 1fr);
+            gap: 1.5rem;
+            margin-bottom: 3rem;
+        }
+        @media (min-width: 768px) {
+            .grid { grid-template-columns: repeat(4, 1fr); }
+        }
+        .card {
+            border-radius: 1rem;
+            padding: 1.5rem;
             box-shadow: 0 0 20px rgba(56, 189, 248, 0.15);
+        }
+        .card-title {
+            color: #94a3b8;
+            font-size: 0.875rem;
+            font-weight: 500;
+            margin: 0 0 0.5rem 0;
+        }
+        .card-value {
+            font-size: 1.875rem;
+            font-weight: 700;
+            margin: 0;
+        }
+        .text-emerald { color: #34d399; }
+        .text-amber { color: #fbbf24; }
+        .text-rose { color: #fb7185; }
+        
+        .table-container {
+            border-radius: 1rem;
+            overflow: hidden;
+            margin-bottom: 3rem;
+            box-shadow: 0 0 20px rgba(56, 189, 248, 0.15);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+        th {
+            background-color: rgba(30, 41, 59, 0.5);
+            color: #cbd5e1;
+            padding: 1rem;
+            font-weight: 600;
+            font-size: 0.875rem;
+            border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+        }
+        td {
+            padding: 1rem;
+            font-size: 0.875rem;
+            color: #cbd5e1;
+            border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+        }
+        .text-right { text-align: right; }
+        .text-center { text-align: center; }
+        .font-mono { font-family: ui-monospace, monospace; color: #7dd3fc; font-size: 0.75rem; }
+        .truncate {
+            max-width: 32rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .pill {
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            border: 1px solid currentColor;
+            text-transform: uppercase;
+        }
+        .status-pass { color: #34d399; background-color: rgba(52, 211, 153, 0.1); }
+        .status-fail { color: #fb7185; background-color: rgba(251, 113, 133, 0.1); }
+        .status-unverified { color: #fbbf24; background-color: rgba(251, 191, 36, 0.1); }
+        .status-skipped { color: #94a3b8; background-color: rgba(148, 163, 184, 0.1); }
+        
+        .footer {
+            border-radius: 1rem;
+            padding: 1.5rem;
+            color: #94a3b8;
+            font-size: 0.875rem;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .footer h4 {
+            color: #cbd5e1;
+            font-weight: 600;
+            margin: 0 0 0.5rem 0;
+        }
+        .footer ul {
+            margin: 0;
+            padding-left: 1.5rem;
+        }
+        .footer li {
+            margin-bottom: 0.25rem;
         }
     </style>
 </head>
-<body class="min-h-screen p-8 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]">
-    <div class="max-w-6xl mx-auto animate-fade-in-up">
+<body>
+    <div class="container">
         <!-- Header -->
-        <header class="flex justify-between items-center mb-10">
+        <div class="header">
             <div>
-                <h1 class="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-indigo-500 tracking-tight">Precedent Scorecard</h1>
-                <p class="text-slate-400 mt-2 text-sm">Generated on {{ .Date }}</p>
+                <h1 class="title">Precedent Scorecard</h1>
+                <p class="subtitle">Generated on {{ .Date }}</p>
             </div>
-            <div class="glass px-4 py-2 rounded-full border border-slate-700/50 flex items-center gap-2">
-                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                <span class="text-sm text-slate-300 font-medium">Benchmark Complete</span>
+            <div class="glass status-badge">
+                <span class="pulse"></span>
+                Benchmark Complete
             </div>
-        </header>
+        </div>
 
         <!-- KPI Cards -->
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-12">
-            <div class="glass glow rounded-2xl p-6 relative overflow-hidden group hover:-translate-y-1 transition-all duration-300 cursor-default">
-                <div class="absolute inset-0 bg-gradient-to-br from-indigo-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                <h3 class="text-slate-400 text-sm font-medium mb-2">Total Tasks</h3>
-                <p class="text-3xl font-bold text-white">{{ .TotalTasks }}</p>
+        <div class="grid">
+            <div class="glass card">
+                <h3 class="card-title">Total Tasks</h3>
+                <p class="card-value">{{ .TotalTasks }}</p>
             </div>
-            <div class="glass glow rounded-2xl p-6 relative overflow-hidden group hover:-translate-y-1 transition-all duration-300 cursor-default">
-                <div class="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                <h3 class="text-slate-400 text-sm font-medium mb-2">Total Cost</h3>
-                <p class="text-3xl font-bold text-emerald-400">${{ printf "%.2f" .TotalCost }}</p>
+            <div class="glass card">
+                <h3 class="card-title">Total Cost</h3>
+                <p class="card-value text-emerald">${{ printf "%.2f" .TotalCost }}</p>
             </div>
-            <div class="glass glow rounded-2xl p-6 relative overflow-hidden group hover:-translate-y-1 transition-all duration-300 cursor-default">
-                <div class="absolute inset-0 bg-gradient-to-br from-amber-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                <h3 class="text-slate-400 text-sm font-medium mb-2">Avg Tokens / Task</h3>
-                <p class="text-3xl font-bold text-amber-400">{{ .AverageTokens }}</p>
+            <div class="glass card">
+                <h3 class="card-title">Avg Tokens / Task</h3>
+                <p class="card-value text-amber">{{ .AverageTokens }}</p>
             </div>
-            <div class="glass glow rounded-2xl p-6 relative overflow-hidden group hover:-translate-y-1 transition-all duration-300 cursor-default">
-                <div class="absolute inset-0 bg-gradient-to-br from-rose-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                <h3 class="text-slate-400 text-sm font-medium mb-2">Total Time</h3>
-                <p class="text-3xl font-bold text-rose-400">{{ .TotalTime }}</p>
+            <div class="glass card">
+                <h3 class="card-title">Total Time</h3>
+                <p class="card-value text-rose">{{ .TotalTime }}</p>
             </div>
         </div>
 
         <!-- Table -->
-        <div class="glass rounded-2xl overflow-hidden glow mb-12">
-            <table class="w-full text-left border-collapse">
+        <div class="glass table-container">
+            <table>
                 <thead>
-                    <tr class="bg-slate-800/50 text-slate-300 border-b border-slate-700/50 text-sm">
-                        <th class="p-4 font-semibold">Task ID</th>
-                        <th class="p-4 font-semibold">Problem Statement</th>
-                        <th class="p-4 font-semibold text-right">Cost</th>
-                        <th class="p-4 font-semibold text-right">Time</th>
-                        <th class="p-4 font-semibold text-center">Status</th>
+                    <tr>
+                        <th>Task ID</th>
+                        <th>Problem Statement</th>
+                        <th class="text-right">Cost</th>
+                        <th class="text-right">Time</th>
+                        <th class="text-center">Status</th>
                     </tr>
                 </thead>
-                <tbody class="divide-y divide-slate-700/50 text-sm">
+                <tbody>
                     {{ range .Results }}
-                    <tr class="hover:bg-slate-800/30 transition-colors">
-                        <td class="p-4 font-mono text-xs text-sky-300">{{ .Task.InstanceID }}</td>
-                        <td class="p-4 text-slate-300 max-w-xl truncate" title="{{ .Task.ProblemStatement }}">{{ .Task.ProblemStatement }}</td>
-                        <td class="p-4 text-right font-medium">${{ printf "%.2f" .Result.CostUSD }}</td>
-                        <td class="p-4 text-right text-slate-400">{{ .Result.Duration }}</td>
-                        <td class="p-4 text-center">
-                            <span class="px-3 py-1 rounded-full text-xs font-medium {{ .StatusColor }} bg-opacity-10 border border-current shadow-sm">
+                    <tr>
+                        <td class="font-mono">{{ .Task.InstanceID }}</td>
+                        <td><div class="truncate" title="{{ .Task.ProblemStatement }}">{{ .Task.ProblemStatement }}</div></td>
+                        <td class="text-right">${{ printf "%.2f" .Result.CostUSD }}</td>
+                        <td class="text-right">{{ .Result.Duration }}</td>
+                        <td class="text-center">
+                            <span class="pill status-{{ .Status }}">
                                 {{ .Status }}
                             </span>
                         </td>
@@ -118,9 +252,9 @@ const htmlTemplate = `<!DOCTYPE html>
         </div>
 
         <!-- Limitations Footer -->
-        <div class="glass rounded-2xl p-6 text-sm text-slate-400 border border-slate-700/50">
-            <h4 class="text-slate-300 font-semibold mb-2">⚠️ Benchmark Limitations</h4>
-            <ul class="list-disc list-inside space-y-1">
+        <div class="glass footer">
+            <h4>⚠️ Benchmark Limitations</h4>
+            <ul>
                 <li><strong>Pass@1 Only:</strong> Agents are given a single attempt without retry feedback.</li>
                 <li><strong>Non-Deterministic:</strong> AI outputs vary. A PASS today may be a FAIL tomorrow due to random seed variance.</li>
                 <li><strong>Flaky Tests:</strong> While Fail-to-Pass validation is enforced, environmental race conditions may occasionally cause false negatives.</li>
@@ -141,10 +275,9 @@ func GenerateScorecard(tasks []types.Task, results []*adapters.AgentResult, outP
 	for i, task := range tasks {
 		res := results[i]
 
-		var status, statusColor string
+		var status string
 		if res == nil {
-			status = "SKIPPED"
-			statusColor = "text-slate-400 border-slate-400 bg-slate-400"
+			status = "skipped"
 			res = &adapters.AgentResult{Duration: 0} // Prevent template nil panics
 		} else {
 			totalCost += res.CostUSD
@@ -152,22 +285,18 @@ func GenerateScorecard(tasks []types.Task, results []*adapters.AgentResult, outP
 			totalDuration += res.Duration
 
 			if res.Error != nil {
-				status = "FAIL"
-				statusColor = "text-rose-400 border-rose-400 bg-rose-400"
+				status = "fail"
 			} else if res.Unverified {
-				status = "UNVERIFIED"
-				statusColor = "text-amber-400 border-amber-400 bg-amber-400"
+				status = "unverified"
 			} else {
-				status = "PASS"
-				statusColor = "text-emerald-400 border-emerald-400 bg-emerald-400"
+				status = "pass"
 			}
 		}
 
 		tableResults = append(tableResults, TaskResult{
-			Task:        task,
-			Result:      res,
-			Status:      status,
-			StatusColor: statusColor,
+			Task:   task,
+			Result: res,
+			Status: status,
 		})
 	}
 
