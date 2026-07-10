@@ -53,7 +53,7 @@ func TestMiner_NulParsing(t *testing.T) {
 	runGit(t, repoPath, "add", "deps.go", "deps_test.go")
 	runGit(t, repoPath, "config", "user.name", "dependabot[bot]") // spoof bot
 	runGit(t, repoPath, "commit", "-m", "chore: update deps")
-	runGit(t, repoPath, "config", "user.name", "Test User")       // restore user
+	runGit(t, repoPath, "config", "user.name", "Test User") // restore user
 
 	// Commit 4: True Empty commit (should not crash parser)
 	runGit(t, repoPath, "commit", "--allow-empty", "-m", "true empty commit")
@@ -87,6 +87,10 @@ func TestMiner_NulParsing(t *testing.T) {
 		}
 		if task.ProblemStatement == "weird file names" {
 			foundWeird = true
+		}
+		// Assert that no task lists "COMMIT" or other metadata as a file/content
+		if task.InstanceID == "" || task.BaseCommit == "" {
+			t.Errorf("Task missing InstanceID or BaseCommit")
 		}
 	}
 

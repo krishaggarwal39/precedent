@@ -205,6 +205,17 @@ func (m *TaskMiner) Mine(ctx context.Context) ([]types.Task, error) {
 				state = 0 // End of file list
 				continue
 			}
+			if token == "COMMIT" {
+				// Edge case: git omitted the empty separator token
+				processCommit()
+				if m.MaxTasks > 0 && len(tasks) >= m.MaxTasks {
+					break
+				}
+				currHash, currAuthor, currSubject = "", "", ""
+				currSrcFiles, currTestFiles = nil, nil
+				state = 1
+				continue
+			}
 			filename := strings.TrimPrefix(token, "\n")
 			if filename == "" {
 				continue
