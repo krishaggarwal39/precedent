@@ -1,0 +1,10 @@
+# Binaries
+precedent
+*.exe
+
+# Precedent Scratch Directory (Tasks, Worktrees, Output)
+.precedent/
+scorecard.html
+
+# OS specific
+.DS_Store
