@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -16,20 +17,47 @@ var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize Precedent in the current directory",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🔍 Scanning git history for test-driven fixes...")
-
-		tasksDir := ".precedent/tasks"
-		if err := os.MkdirAll(tasksDir, 0755); err != nil {
-			return fmt.Errorf("doing mkdir: %w", err)
-		}
-
 		repoPath, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("getting wd: %w", err)
 		}
 
+		tasksDir := ".precedent/tasks"
+		// 🚨 Security Hardening: Ensure .precedent is gitignored
+		gitignorePath := filepath.Join(repoPath, ".gitignore")
+		gitignoreContent, _ := os.ReadFile(gitignorePath)
+		if !strings.Contains(string(gitignoreContent), ".precedent/") {
+			f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err == nil {
+				f.WriteString("\n# Precedent CLI Scratch Directory\n.precedent/\n")
+				f.Close()
+				fmt.Println("🔒 Secured workspace (added .precedent/ to .gitignore)")
+			}
+		}
+
+		fmt.Println("🔍 Scanning git history for test-driven fixes...")
+		if err := os.MkdirAll(tasksDir, 0755); err != nil {
+			return fmt.Errorf("doing mkdir: %w", err)
+		}
+
+		relaxed, _ := cmd.Flags().GetBool("relaxed")
+		testCmd, _ := cmd.Flags().GetString("test-cmd")
+
+		// 🚨 Smart Detection Logic
+		if testCmd == "" && !relaxed {
+			fmt.Println("🔍 Auto-detecting test framework...")
+			detectedCmd := miner.DetectTestCommand(repoPath)
+			if detectedCmd != "" {
+				testCmd = detectedCmd
+				fmt.Printf("✅ Detected test command: '%s'\n", testCmd)
+			} else {
+				fmt.Println("⚠️  Warning: Could not auto-detect test framework. Falling back to Relaxed Mode (skipping strict fail-to-pass validation). Provide --test-cmd to enable strict mode.")
+				relaxed = true
+			}
+		}
+
 		// Initialize miner (limit to 10 tasks for now)
-		taskMiner := miner.NewTaskMiner(repoPath, 10)
+		taskMiner := miner.NewTaskMiner(repoPath, 10, testCmd, relaxed)
 		tasks, err := taskMiner.Mine(context.Background())
 		if err != nil {
 			return fmt.Errorf("mining tasks: %w", err)
@@ -60,5 +88,7 @@ var initCmd = &cobra.Command{
 }
 
 func init() {
+	initCmd.Flags().String("test-cmd", "", "Command to run tests (e.g. 'npm test', 'pytest')")
+	initCmd.Flags().Bool("relaxed", false, "Skip strict fail-to-pass test validation")
 	rootCmd.AddCommand(initCmd)
 }

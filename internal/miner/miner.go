@@ -4,28 +4,32 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"math/rand"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/precedent-cli/precedent/internal/types"
 )
 
-// TaskMiner scans a git repository to find commits that represent valid tasks.
 type TaskMiner struct {
-	RepoPath string
-	MaxTasks int
+	RepoPath    string
+	MaxTasks    int
+	TestCommand string
+	Relaxed     bool
 }
 
-// NewTaskMiner creates a new TaskMiner.
-func NewTaskMiner(repoPath string, maxTasks int) *TaskMiner {
+func NewTaskMiner(repoPath string, maxTasks int, testCommand string, relaxed bool) *TaskMiner {
 	return &TaskMiner{
-		RepoPath: repoPath,
-		MaxTasks: maxTasks,
+		RepoPath:    repoPath,
+		MaxTasks:    maxTasks,
+		TestCommand: testCommand,
+		Relaxed:     relaxed,
 	}
 }
 
-// isBot returns true if the author looks like a bot.
 func isBot(author string) bool {
 	author = strings.ToLower(author)
 	bots := []string{"dependabot", "renovate", "snyk", "bot", "github-actions"}
@@ -37,7 +41,6 @@ func isBot(author string) bool {
 	return false
 }
 
-// isTestFile attempts to heuristically determine if a file is a test file.
 func isTestFile(filename string) bool {
 	lower := strings.ToLower(filename)
 	return strings.HasSuffix(lower, "_test.go") ||
@@ -47,11 +50,68 @@ func isTestFile(filename string) bool {
 		strings.HasPrefix(filepath.Base(lower), "test_")
 }
 
-// Mine runs git log and extracts tasks based on SWE-bench fail-to-pass methodology.
+func (m *TaskMiner) getPatch(ctx context.Context, commitHash string, files []string) (string, error) {
+	if len(files) == 0 {
+		return "", nil
+	}
+	args := []string{"show", "--format=", commitHash, "--"}
+	args = append(args, files...)
+
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = m.RepoPath
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// verifyFailToPass creates a temporary worktree to ensure the base commit FAILS the tests,
+// and the head commit PASSES the tests.
+func (m *TaskMiner) verifyFailToPass(ctx context.Context, headCommit, baseCommit string, testFiles []string) bool {
+	// Safety: Create a temporary worktree so we don't mess up the user's active workspace
+	wtDir := filepath.Join(m.RepoPath, ".precedent", "validation_wt")
+	_ = os.RemoveAll(wtDir) // Ensure clean state
+
+	// Add worktree at BaseCommit
+	addCmd := exec.CommandContext(ctx, "git", "worktree", "add", "--detach", wtDir, baseCommit)
+	addCmd.Dir = m.RepoPath
+	if err := addCmd.Run(); err != nil {
+		return false // if we can't checkout, it's invalid
+	}
+	defer func() {
+		rmCmd := exec.CommandContext(context.Background(), "git", "worktree", "remove", "--force", wtDir)
+		rmCmd.Dir = m.RepoPath
+		_ = rmCmd.Run()
+		_ = os.RemoveAll(wtDir)
+	}()
+
+	// 1. Test BaseCommit (Must Fail)
+	testBase := exec.CommandContext(ctx, "sh", "-c", m.TestCommand)
+	testBase.Dir = wtDir
+	if err := testBase.Run(); err == nil {
+		// It passed! This means it doesn't fail-to-pass, or the tests weren't failing.
+		return false
+	}
+
+	// 2. Checkout HeadCommit and test (Must Pass)
+	checkoutCmd := exec.CommandContext(ctx, "git", "checkout", headCommit)
+	checkoutCmd.Dir = wtDir
+	if err := checkoutCmd.Run(); err != nil {
+		return false
+	}
+
+	testHead := exec.CommandContext(ctx, "sh", "-c", m.TestCommand)
+	testHead.Dir = wtDir
+	if err := testHead.Run(); err != nil {
+		// It failed on the head commit too! It's a broken test or flaky test.
+		return false
+	}
+
+	return true // Verified!
+}
+
 func (m *TaskMiner) Mine(ctx context.Context) ([]types.Task, error) {
-	// Execute git log streaming the output.
-	// Format: COMMIT|hash|author_name|subject
-	// Followed by the list of modified files due to --name-only
 	cmd := exec.CommandContext(ctx, "git", "log", "--pretty=format:COMMIT|%H|%an|%s", "--name-only", "--no-merges")
 	cmd.Dir = m.RepoPath
 
@@ -68,22 +128,42 @@ func (m *TaskMiner) Mine(ctx context.Context) ([]types.Task, error) {
 	var tasks []types.Task
 
 	var currHash, currAuthor, currSubject string
-	var currModifiesSrc, currModifiesTest bool
+	var currSrcFiles, currTestFiles []string
 
 	processCommit := func() {
 		if currHash == "" {
 			return
 		}
-		// A valid fix modifies both source code and tests, and is not a bot.
-		if currModifiesSrc && currModifiesTest && !isBot(currAuthor) {
+
+		if len(currSrcFiles) > 0 && len(currTestFiles) > 0 && !isBot(currAuthor) {
+			baseCommit := currHash + "~1"
+
+			if !m.Relaxed {
+				// 🚨 Strict Benchmark Integrity: Fail-to-Pass Validation
+				fmt.Printf("🔍 Validating candidate task %s with '%s' (Fail-to-Pass check)...\n", currHash[:7], m.TestCommand)
+				if !m.verifyFailToPass(ctx, currHash, baseCommit, currTestFiles) {
+					fmt.Printf("❌ Discarded %s: Did not meet Fail-to-Pass criteria.\n", currHash[:7])
+					return
+				}
+				fmt.Printf("✅ Verified %s: Passed Fail-to-Pass check.\n", currHash[:7])
+			} else {
+				fmt.Printf("⚠️ Accepting %s (Relaxed Mode: Skipping strict validation)\n", currHash[:7])
+			}
+
 			repoName := filepath.Base(m.RepoPath)
 			taskID := fmt.Sprintf("%s-%s", repoName, currHash[:7])
 
+			srcPatch, _ := m.getPatch(ctx, currHash, currSrcFiles)
+			testPatch, _ := m.getPatch(ctx, currHash, currTestFiles)
+
 			tasks = append(tasks, types.Task{
 				InstanceID:       taskID,
-				BaseCommit:       currHash + "~1", // The state of the repo right before the fix
+				BaseCommit:       baseCommit,
 				ProblemStatement: currSubject,
 				Repo:             repoName,
+				Patch:            srcPatch,
+				TestPatch:        testPatch,
+				TestCommand:      m.TestCommand,
 			})
 		}
 	}
@@ -103,29 +183,34 @@ func (m *TaskMiner) Mine(ctx context.Context) ([]types.Task, error) {
 				currHash = parts[1]
 				currAuthor = parts[2]
 				currSubject = strings.TrimSpace(parts[3])
-				currModifiesSrc = false
-				currModifiesTest = false
+				currSrcFiles = nil
+				currTestFiles = nil
 			} else {
 				currHash = ""
 			}
 		} else if line != "" && currHash != "" {
-			// This is a modified file path
 			if isTestFile(line) {
-				currModifiesTest = true
+				currTestFiles = append(currTestFiles, line)
 			} else {
-				currModifiesSrc = true
+				currSrcFiles = append(currSrcFiles, line)
 			}
 		}
 	}
 	processCommit()
 
-	// Wait for the command to finish, ignoring errors if we hit our max tasks limit.
 	if err := cmd.Wait(); err != nil {
 		if m.MaxTasks > 0 && len(tasks) >= m.MaxTasks {
-			return tasks, nil
+			goto Finish
 		}
 		return nil, fmt.Errorf("git log failed: %w", err)
 	}
+
+Finish:
+	// Randomize task order to prevent execution caching bias
+	rand.Seed(time.Now().UnixNano())
+	rand.Shuffle(len(tasks), func(i, j int) {
+		tasks[i], tasks[j] = tasks[j], tasks[i]
+	})
 
 	return tasks, nil
 }
