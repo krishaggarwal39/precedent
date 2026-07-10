@@ -2,11 +2,8 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -15,12 +12,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/precedent-cli/precedent/internal/adapters"
 	"github.com/precedent-cli/precedent/internal/config"
+	"github.com/precedent-cli/precedent/internal/engine"
+	"github.com/precedent-cli/precedent/internal/paths"
 	"github.com/precedent-cli/precedent/internal/report"
-	"github.com/precedent-cli/precedent/internal/runner"
 	"github.com/precedent-cli/precedent/internal/types"
 )
 
@@ -129,60 +126,52 @@ var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run the benchmark on generated tasks",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		tasksDir := ".precedent/tasks"
-		worktreesDir := ".precedent/worktrees"
-
-		if err := os.MkdirAll(worktreesDir, 0755); err != nil {
+		if err := os.MkdirAll(paths.WorktreesDir, 0755); err != nil {
 			return err
 		}
 
-		files, err := os.ReadDir(tasksDir)
+		tasks, err := engine.LoadTasks(paths.TasksDir)
 		if err != nil {
-			if os.IsNotExist(err) {
-				fmt.Println(errorStyle.Render("❌ No tasks found. Run 'precedent init' first."))
+			fmt.Println(errorStyle.Render("❌ " + err.Error()))
+			return nil
+		}
+
+		skipConfirm, _ := cmd.Flags().GetBool("yes")
+		if !skipConfirm {
+			fmt.Println(titleStyle.Render("🛡️ Security Verification (Trust Boundary)"))
+			fmt.Println("You are about to run tests against the agent's code.")
+
+			fmt.Print("\nDo you want to proceed? (y/N): ")
+			var response string
+			fmt.Scanln(&response)
+			if response != "y" && response != "Y" && response != "yes" {
+				fmt.Println(errorStyle.Render("❌ Benchmark aborted by user."))
 				return nil
 			}
-			return err
-		}
-
-		var tasks []types.Task
-		for _, f := range files {
-			if filepath.Ext(f.Name()) == ".json" {
-				b, _ := os.ReadFile(filepath.Join(tasksDir, f.Name()))
-				var task types.Task
-				json.Unmarshal(b, &task)
-				tasks = append(tasks, task)
-			}
-		}
-
-		if len(tasks) == 0 {
-			fmt.Println(errorStyle.Render("❌ No tasks found."))
-			return nil
 		}
 
 		agentFlag, _ := cmd.Flags().GetString("agent")
 		dockerImage, _ := cmd.Flags().GetString("docker-image")
 		maxCost, _ := cmd.Flags().GetFloat64("max-cost")
-
-		var agent adapters.AgentAdapter
+		testCmd, _ := cmd.Flags().GetString("test-cmd")
+		taskTimeout, _ := cmd.Flags().GetDuration("task-timeout")
 
 		// Load custom agents from YAML
-		agentConfigs, _ := config.LoadAgentsConfig(".precedent/agents.yaml")
-		if cfg, exists := agentConfigs[agentFlag]; exists {
-			agent = &adapters.YamlAdapter{
-				AgentName: agentFlag,
-				Config:    cfg,
-			}
-		} else if agentFlag == "claude" || agentFlag == "claude-code" {
-			agent = &adapters.ClaudeAdapter{}
-		} else {
-			fmt.Printf(errorStyle.Render("❌ Unknown agent: %s. Define it in .precedent/agents.yaml or use 'claude'")+"\n", agentFlag)
+		agentConfigs, _ := config.LoadAgentsConfig(paths.AgentsConfig)
+
+		agent, err := adapters.Resolve(agentFlag, agentConfigs)
+		if err != nil {
+			fmt.Println(errorStyle.Render(fmt.Sprintf("❌ %v", err)))
+			return nil
+		}
+
+		if !agent.IsInstalled() {
+			fmt.Println(errorStyle.Render(fmt.Sprintf("❌ Agent '%s' is not installed or available in PATH.", agentFlag)))
 			return nil
 		}
 
 		p := tea.NewProgram(initialModel(tasks))
 
-		// 🚨 FIX: Handle non-TTY environments gracefully (e.g. CI/CD or background tasks)
 		isTTY := false
 		if fileInfo, _ := os.Stdout.Stat(); (fileInfo.Mode() & os.ModeCharDevice) != 0 {
 			isTTY = true
@@ -212,106 +201,73 @@ var runCmd = &cobra.Command{
 			time.Sleep(2 * time.Second)
 		}
 
-		g, ctx := errgroup.WithContext(ctx)
-		g.SetLimit(finalConc)
 		repoPath, _ := os.Getwd()
 
-		var currentCost float64
-		var costMu sync.Mutex
+		engCfg := engine.Config{
+			RepoPath:    repoPath,
+			TasksDir:    paths.TasksDir,
+			WorktreeDir: paths.WorktreesDir,
+			MaxCost:     maxCost,
+			Concurrency: finalConc,
+			DockerImage: dockerImage,
+			TaskTimeout: taskTimeout,
+			TestCommand: testCmd,
+		}
 
+		eng := engine.New(engCfg, agent)
+		events, results, err := eng.Run(ctx, tasks)
+		if err != nil {
+			return err
+		}
+
+		// Event loop
 		go func() {
-			for _, task := range tasks {
-				t := task
-				g.Go(func() error {
-					if ctx.Err() != nil {
-						return nil // Global context cancelled due to max cost
-					}
+			for event := range events {
+				switch event.Type {
+				case engine.EventTaskStarted:
 					if isTTY {
-						p.Send(taskStartMsg{id: t.InstanceID})
+						p.Send(taskStartMsg{id: event.InstanceID})
 					} else {
-						fmt.Printf("▶️ Starting %s...\n", t.InstanceID)
+						fmt.Printf("▶️ Starting %s...\n", event.InstanceID)
 					}
-
-					wtDir := filepath.Join(repoPath, worktreesDir, t.InstanceID)
-					isolation := runner.NewGitIsolation(repoPath, wtDir, t.BaseCommit)
-					_ = isolation.Setup(ctx)
-					defer isolation.Teardown(context.Background())
-
-					// 🚨 Security Hardening: Strict 10-minute timeout per task to prevent runaway costs
-					agentCtx, agentCancel := context.WithTimeout(ctx, 10*time.Minute)
-					defer agentCancel()
-
-					var result *adapters.AgentResult
-					if agent.IsInstalled() {
-						result, _ = agent.Run(agentCtx, wtDir, t.ProblemStatement, t)
-					} else {
-						dummy := &adapters.DummyAdapter{}
-						result, _ = dummy.Run(agentCtx, wtDir, t.ProblemStatement, t)
-					}
-
-					// 🚨 The Final Exam & Sandboxing
-					if result.Error == nil && t.TestCommand != "" {
-						var testCmd *exec.Cmd
-						if dockerImage != "" {
-							absWtDir, _ := filepath.Abs(wtDir)
-							dockerArgs := []string{"run", "--rm", "-v", fmt.Sprintf("%s:/workspace", absWtDir), "-w", "/workspace", dockerImage, "sh", "-c", t.TestCommand}
-							testCmd = exec.CommandContext(agentCtx, "docker", dockerArgs...)
-						} else {
-							testCmd = exec.CommandContext(agentCtx, "sh", "-c", t.TestCommand)
-							testCmd.Dir = wtDir
-						}
-
-						out, err := testCmd.CombinedOutput()
-						if err != nil {
-							result.Error = fmt.Errorf("Test failed: %v\nOutput: %s", err, string(out))
-						}
-					}
-
+				case engine.EventTaskFinished:
 					if isTTY {
-						p.Send(taskDoneMsg{id: t.InstanceID, result: result})
+						p.Send(taskDoneMsg{id: event.InstanceID, result: event.Result})
 					} else {
-						fmt.Printf("✅ Finished %s in %v\n", t.InstanceID, result.Duration)
+						fmt.Printf("✅ Finished %s in %v\n", event.InstanceID, event.Result.Duration)
 					}
-
-					costMu.Lock()
-					currentCost += result.CostUSD
-					if maxCost > 0 && currentCost >= maxCost {
-						if isTTY {
-							// For MVP, just printing over the TUI might be messy, but it's a critical alert
-						}
-						fmt.Println(errorStyle.Render(fmt.Sprintf("\n🚨 ALERT: Max cost of $%.2f exceeded (Current: $%.2f). Cancelling remaining tasks to protect your budget!\n", maxCost, currentCost)))
-						cancel()
+				case engine.EventBudgetExceeded:
+					if !isTTY {
+						fmt.Println(errorStyle.Render(fmt.Sprintf("\n🚨 ALERT: %s\n", event.Message)))
 					}
-					costMu.Unlock()
-
-					return nil
-				})
+				}
 			}
-			_ = g.Wait()
-			if !isTTY {
-				fmt.Println("Fallback non-TTY run complete. Scorecard generation requires TTY in V1.")
-				os.Exit(0)
+			if isTTY {
+				p.Send(tea.QuitMsg{})
 			}
 		}()
 
 		if isTTY {
-			m, err := p.Run()
+			_, err := p.Run()
 			if err != nil {
 				return err
 			}
-
-			finalModel := m.(runnerModel)
-
-			fmt.Println("\n" + titleStyle.Render("📊 Generating Scorecard..."))
-
-			reportPath := "scorecard.html"
-			if err := report.GenerateScorecard(finalModel.tasks, finalModel.results, reportPath); err != nil {
-				return err
-			}
-
-			successMsg := fmt.Sprintf("✨ Benchmark Complete! Open %s to view your premium results.", reportPath)
-			fmt.Println(successStyle.Render(successMsg))
+		} else {
+			// In non-TTY mode, we must wait for the events channel to close
+			// which happens when the engine finishes.
+			for range events {
+			} // Drain remaining if any
 		}
+
+		fmt.Println("\n" + titleStyle.Render("📊 Generating Scorecard..."))
+
+		reportPath := "scorecard.html"
+		if err := report.GenerateScorecard(tasks, results, reportPath); err != nil {
+			return err
+		}
+
+		successMsg := fmt.Sprintf("✨ Benchmark Complete! Open %s to view your premium results.", reportPath)
+		fmt.Println(successStyle.Render(successMsg))
 		return nil
 	},
 }
@@ -321,5 +277,8 @@ func init() {
 	runCmd.Flags().IntP("concurrency", "c", 0, "Number of concurrent tasks (0 = smart auto-detect based on CPU)")
 	runCmd.Flags().String("docker-image", "", "Docker image to run tests in (e.g. node:18). If empty, runs locally.")
 	runCmd.Flags().Float64("max-cost", 5.0, "Maximum total cost in USD before aborting (0 for unlimited)")
+	runCmd.Flags().BoolP("yes", "y", false, "Skip interactive confirmation for test commands")
+	runCmd.Flags().String("test-cmd", "", "The test command to execute to verify correctness")
+	runCmd.Flags().Duration("task-timeout", 10*time.Minute, "Timeout per task")
 	rootCmd.AddCommand(runCmd)
 }

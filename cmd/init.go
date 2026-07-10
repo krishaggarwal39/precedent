@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/precedent-cli/precedent/internal/miner"
+	"github.com/precedent-cli/precedent/internal/paths"
 )
 
 var initCmd = &cobra.Command{
@@ -22,7 +23,7 @@ var initCmd = &cobra.Command{
 			return fmt.Errorf("getting wd: %w", err)
 		}
 
-		tasksDir := ".precedent/tasks"
+		tasksDir := paths.TasksDir
 		// 🚨 Security Hardening: Ensure .precedent is gitignored
 		gitignorePath := filepath.Join(repoPath, ".gitignore")
 		gitignoreContent, _ := os.ReadFile(gitignorePath)

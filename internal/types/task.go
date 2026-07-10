@@ -15,5 +15,4 @@ type Task struct {
 	FailToPass       string `json:"FAIL_TO_PASS"`
 	PassToPass       string `json:"PASS_TO_PASS"`
 	EnvironmentSetup string `json:"environment_setup_commit"`
-	TestCommand      string `json:"test_command"`
 }

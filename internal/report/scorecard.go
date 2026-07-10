@@ -140,15 +140,27 @@ func GenerateScorecard(tasks []types.Task, results []*adapters.AgentResult, outP
 
 	for i, task := range tasks {
 		res := results[i]
-		totalCost += res.CostUSD
-		totalTokens += res.TotalTokens
-		totalDuration += res.Duration
 
-		status := "PASS"
-		statusColor := "text-emerald-400 border-emerald-400 bg-emerald-400"
-		if res.Error != nil {
-			status = "FAIL"
-			statusColor = "text-rose-400 border-rose-400 bg-rose-400"
+		var status, statusColor string
+		if res == nil {
+			status = "SKIPPED"
+			statusColor = "text-slate-400 border-slate-400 bg-slate-400"
+			res = &adapters.AgentResult{Duration: 0} // Prevent template nil panics
+		} else {
+			totalCost += res.CostUSD
+			totalTokens += res.TotalTokens
+			totalDuration += res.Duration
+
+			if res.Error != nil {
+				status = "FAIL"
+				statusColor = "text-rose-400 border-rose-400 bg-rose-400"
+			} else if res.Unverified {
+				status = "UNVERIFIED"
+				statusColor = "text-amber-400 border-amber-400 bg-amber-400"
+			} else {
+				status = "PASS"
+				statusColor = "text-emerald-400 border-emerald-400 bg-emerald-400"
+			}
 		}
 
 		tableResults = append(tableResults, TaskResult{
