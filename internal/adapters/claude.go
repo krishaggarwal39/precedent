@@ -2,7 +2,9 @@ package adapters
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 
@@ -31,7 +33,7 @@ func (c *ClaudeAdapter) Run(ctx context.Context, workDir string, taskPrompt stri
 	// Command: claude -p "<prompt>"
 	// Since we are running unattended, claude-code might need specific flags or env vars.
 	// For V1, we just spawn it with the prompt.
-	cmd := exec.CommandContext(ctx, "claude", "-p", taskPrompt)
+	cmd := exec.CommandContext(ctx, "claude", "-p", taskPrompt, "--output-format", "json")
 	cmd.Dir = workDir
 
 	// Create a new process group so we can reliably kill it and its children
@@ -41,8 +43,6 @@ func (c *ClaudeAdapter) Run(ctx context.Context, workDir string, taskPrompt stri
 	}
 	cmd.WaitDelay = 10 * time.Second
 
-	// We don't pipe stdout/stderr to terminal because this runs concurrently
-	// But we should capture it for the result.
 	out, err := cmd.CombinedOutput()
 	duration := time.Since(start)
 
@@ -53,13 +53,34 @@ func (c *ClaudeAdapter) Run(ctx context.Context, workDir string, taskPrompt stri
 		}, err
 	}
 
-	// Parse cost from claude's output (mocked for V1 since we don't have exact stdout schema yet)
-	// Example: In a real implementation, we would regex search for "Cost: $X.XX"
+	costUSD, tokens, parseErr := parseClaudeOutput(out)
+	if parseErr != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ Warning: could not parse cost data from claude output: %v\n", parseErr)
+	}
 
 	return &AgentResult{
-		CostUSD:     0.0, // TODO: parse from output
-		TotalTokens: 0,   // TODO: parse from output
+		CostUSD:     costUSD,
+		TotalTokens: tokens,
 		Duration:    duration,
 		Error:       nil,
 	}, nil
+}
+
+type claudeOutput struct {
+	TotalCostUSD float64 `json:"total_cost_usd"`
+	Usage        struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
+	IsError bool   `json:"is_error"`
+	Result  string `json:"result"`
+}
+
+func parseClaudeOutput(data []byte) (float64, int, error) {
+	var out claudeOutput
+	if err := json.Unmarshal(data, &out); err != nil {
+		return 0, 0, err
+	}
+	totalTokens := out.Usage.InputTokens + out.Usage.OutputTokens
+	return out.TotalCostUSD, totalTokens, nil
 }
