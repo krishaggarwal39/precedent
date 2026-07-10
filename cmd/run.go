@@ -290,7 +290,7 @@ func init() {
 	runCmd.Flags().StringP("agent", "a", "claude", "Agent to run (e.g., claude, or custom agent defined in .precedent/agents.yaml)")
 	runCmd.Flags().IntP("concurrency", "c", 0, "Number of concurrent tasks (0 = smart auto-detect based on CPU)")
 	runCmd.Flags().String("docker-image", "", "Docker image to run tests in (e.g. node:18). If empty, runs locally.")
-	runCmd.Flags().Float64("max-cost", 5.0, "Maximum total cost in USD before aborting (0 for unlimited)")
+	runCmd.Flags().Float64("max-cost", 5.0, "Maximum total cost in USD before aborting (0 for unlimited). Currently supports claude adapter only; YAML agents report $0.")
 	runCmd.Flags().BoolP("yes", "y", false, "Skip interactive confirmation for test commands")
 	runCmd.Flags().String("test-cmd", "", "The test command to execute to verify correctness")
 	runCmd.Flags().Duration("task-timeout", 10*time.Minute, "Timeout per task")
