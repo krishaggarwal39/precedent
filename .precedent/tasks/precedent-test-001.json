@@ -1,0 +1,14 @@
+{
+  "instance_id": "precedent-test-001",
+  "base_commit": "HEAD",
+  "patch": "",
+  "test_patch": "",
+  "problem_statement": "Fix the bug in the main logic.",
+  "hints_text": "",
+  "created_at": "",
+  "repo": "local",
+  "version": "",
+  "FAIL_TO_PASS": "",
+  "PASS_TO_PASS": "",
+  "environment_setup_commit": ""
+}
