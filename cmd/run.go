@@ -132,22 +132,7 @@ var runCmd = &cobra.Command{
 
 		tasks, err := engine.LoadTasks(paths.TasksDir)
 		if err != nil {
-			fmt.Println(errorStyle.Render("❌ " + err.Error()))
-			return nil
-		}
-
-		skipConfirm, _ := cmd.Flags().GetBool("yes")
-		if !skipConfirm {
-			fmt.Println(titleStyle.Render("🛡️ Security Verification (Trust Boundary)"))
-			fmt.Println("You are about to run tests against the agent's code.")
-
-			fmt.Print("\nDo you want to proceed? (y/N): ")
-			var response string
-			fmt.Scanln(&response)
-			if response != "y" && response != "Y" && response != "yes" {
-				fmt.Println(errorStyle.Render("❌ Benchmark aborted by user."))
-				return nil
-			}
+			return err
 		}
 
 		agentFlag, _ := cmd.Flags().GetString("agent")
@@ -157,17 +142,45 @@ var runCmd = &cobra.Command{
 		taskTimeout, _ := cmd.Flags().GetDuration("task-timeout")
 
 		// Load custom agents from YAML
-		agentConfigs, _ := config.LoadAgentsConfig(paths.AgentsConfig)
+		agentConfigs, err := config.LoadAgentsConfig(paths.AgentsConfig)
+		if err != nil {
+			return err
+		}
 
 		agent, err := adapters.Resolve(agentFlag, agentConfigs)
 		if err != nil {
-			fmt.Println(errorStyle.Render(fmt.Sprintf("❌ %v", err)))
-			return nil
+			return err
 		}
 
 		if !agent.IsInstalled() {
-			fmt.Println(errorStyle.Render(fmt.Sprintf("❌ Agent '%s' is not installed or available in PATH.", agentFlag)))
-			return nil
+			return fmt.Errorf("Agent '%s' is not installed or available in PATH", agentFlag)
+		}
+
+		skipConfirm, _ := cmd.Flags().GetBool("yes")
+		if !skipConfirm {
+			fmt.Println(titleStyle.Render("🛡️ Security Verification (Trust Boundary)"))
+			fmt.Println("You are about to run tests against the agent's code.")
+
+			fmt.Printf("• Agent: %s\n", agent.Name())
+			if testCmd == "" {
+				fmt.Println("• Test Command: (none — results will be marked UNVERIFIED)")
+			} else {
+				fmt.Printf("• Test Command: %s\n", testCmd)
+			}
+			if dockerImage != "" {
+				fmt.Printf("• Environment: Docker (%s)\n", dockerImage)
+			} else {
+				fmt.Println("• Environment: Host")
+				fmt.Println("⚠️ Tests will execute directly on this machine.")
+			}
+
+			fmt.Print("\nDo you want to proceed? (y/N): ")
+			var response string
+			fmt.Scanln(&response)
+			if response != "y" && response != "Y" && response != "yes" {
+				fmt.Println(errorStyle.Render("❌ Benchmark aborted by user."))
+				return nil
+			}
 		}
 
 		p := tea.NewProgram(initialModel(tasks))
@@ -221,18 +234,20 @@ var runCmd = &cobra.Command{
 		}
 
 		// Event loop
+		eventDone := make(chan struct{})
 		go func() {
+			defer close(eventDone)
 			for event := range events {
 				switch event.Type {
 				case engine.EventTaskStarted:
 					if isTTY {
-						p.Send(taskStartMsg{id: event.InstanceID})
+						go p.Send(taskStartMsg{id: event.InstanceID})
 					} else {
 						fmt.Printf("▶️ Starting %s...\n", event.InstanceID)
 					}
 				case engine.EventTaskFinished:
 					if isTTY {
-						p.Send(taskDoneMsg{id: event.InstanceID, result: event.Result})
+						go p.Send(taskDoneMsg{id: event.InstanceID, result: event.Result})
 					} else {
 						fmt.Printf("✅ Finished %s in %v\n", event.InstanceID, event.Result.Duration)
 					}
@@ -243,21 +258,20 @@ var runCmd = &cobra.Command{
 				}
 			}
 			if isTTY {
-				p.Send(tea.QuitMsg{})
+				go p.Send(tea.QuitMsg{})
 			}
 		}()
 
 		if isTTY {
 			_, err := p.Run()
+			cancel() // User pressed 'q', stop running tasks
 			if err != nil {
+				<-eventDone
 				return err
 			}
-		} else {
-			// In non-TTY mode, we must wait for the events channel to close
-			// which happens when the engine finishes.
-			for range events {
-			} // Drain remaining if any
 		}
+
+		<-eventDone
 
 		fmt.Println("\n" + titleStyle.Render("📊 Generating Scorecard..."))
 
