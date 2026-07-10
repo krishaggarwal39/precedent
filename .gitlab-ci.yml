@@ -1,0 +1,31 @@
+image: golang:1.26
+
+stages:
+  - lint
+  - build
+  - test
+
+variables:
+  GOPATH: $CI_PROJECT_DIR/.go
+  CGO_ENABLED: 1
+
+cache:
+  paths:
+    - .go/pkg/mod/
+
+lint:
+  stage: lint
+  image: golangci/golangci-lint:latest
+  script:
+    - golangci-lint run -v --timeout 5m
+
+build:
+  stage: build
+  script:
+    - go build -v ./...
+
+test:
+  stage: test
+  script:
+    - go vet ./...
+    - go test -race -v ./...
