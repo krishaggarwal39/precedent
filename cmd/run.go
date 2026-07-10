@@ -176,7 +176,7 @@ var runCmd = &cobra.Command{
 
 			fmt.Print("\nDo you want to proceed? (y/N): ")
 			var response string
-			fmt.Scanln(&response)
+			_, _ = fmt.Scanln(&response)
 			if response != "y" && response != "Y" && response != "yes" {
 				fmt.Println(errorStyle.Render("❌ Benchmark aborted by user."))
 				return nil

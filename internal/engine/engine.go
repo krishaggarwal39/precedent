@@ -78,7 +78,9 @@ func (e *Engine) Run(ctx context.Context, tasks []types.Task) (<-chan Event, []*
 					events <- Event{Type: EventTaskFinished, InstanceID: t.InstanceID, Result: results[idx]}
 					return nil
 				}
-				defer isolation.Teardown(context.Background())
+				defer func() {
+					_ = isolation.Teardown(context.Background())
+				}()
 
 				agentCtx, agentCancel := context.WithTimeout(gCtx, e.cfg.TaskTimeout)
 				defer agentCancel()

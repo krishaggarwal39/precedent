@@ -79,7 +79,9 @@ func (m *TaskMiner) verifyFailToPass(ctx context.Context, headCommit, baseCommit
 	if err := isolation.Setup(ctx); err != nil {
 		return false
 	}
-	defer isolation.Teardown(context.Background())
+	defer func() {
+		_ = isolation.Teardown(context.Background())
+	}()
 
 	// 1. Test BaseCommit (Must Fail)
 	testBase := exec.CommandContext(ctx, "sh", "-c", m.TestCommand)

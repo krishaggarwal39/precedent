@@ -30,7 +30,7 @@ var initCmd = &cobra.Command{
 		if !strings.Contains(string(gitignoreContent), ".precedent/") {
 			f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err == nil {
-				f.WriteString("\n# Precedent CLI Scratch Directory\n.precedent/\n")
+				_, _ = f.WriteString("\n# Precedent CLI Scratch Directory\n.precedent/\n")
 				f.Close()
 				fmt.Println("🔒 Secured workspace (added .precedent/ to .gitignore)")
 			}
