@@ -22,8 +22,8 @@ The easiest way to contribute is by adding support for a new AI Agent (like a ne
 If you want to contribute to the core Go engine (e.g., improving the Git Miner, enhancing Docker Sandboxing, or fixing bugs):
 
 1. **Fork the repo** and clone it locally.
-2. **Run tests:** Ensure everything passes by running `go test ./...`
-3. **Format code:** Run `go fmt ./...` before submitting a PR.
+2. **Run tests:** Ensure everything passes by running `go vet ./...` and `go test -race ./...`
+3. **Format code:** Run `gofmt -w .` before submitting a PR.
 4. **Submit a Pull Request** with a clear explanation of what you fixed or improved.
 
 Please ensure that any new features include appropriate tests. We strictly adhere to the fail-to-pass methodology for benchmark integrity.

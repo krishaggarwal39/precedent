@@ -14,5 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Agent Adapters:** Native support for Anthropic's `claude-code`.
 - **BYOA (Bring Your Own Agent):** Added `.precedent/agents.yaml` configuration to support running any arbitrary CLI AI agent.
 - **Premium UI:** Integrated Bubbletea interactive spinners for the CLI.
-- **HTML Scorecard:** Zero-dependency HTML report generator (Dark mode, Tailwind) summarizing benchmark pass rates and API costs.
-- **Security:** Strict 10-minute timeouts with process-group `SIGKILL`, automatic `.gitignore` updates, and HTML escaping for XSS protection.
+- **HTML Scorecard:** Zero-dependency HTML report generator summarizing benchmark pass rates and API costs. Offline-safe with embedded styles.
+- **Cost Tracking:** Real cost parsing from Claude's JSON output with `--max-cost` safety nets.
+- **Architecture Refactor:** Decoupled execution loop into the `internal/engine` package for robustness.
+- **Security:** Strict 10-minute timeouts, process-group `SIGKILL`, NUL-byte git parsing, shell-injection defenses via `PRECEDENT_PROMPT`, and interactive Trust Boundary prompts.
+- **Cross-Platform:** Full support for Linux, macOS, and Windows.
+
+### Known Debt
+- The compiled `precedent` binary still exists in earlier git history commits. Purging it via `git filter-repo` was deferred to avoid breaking existing clones.
