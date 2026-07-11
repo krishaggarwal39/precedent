@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -77,8 +78,14 @@ type claudeOutput struct {
 }
 
 func parseClaudeOutput(data []byte) (float64, int, error) {
+	start := bytes.IndexByte(data, '{')
+	end := bytes.LastIndexByte(data, '}')
+	if start == -1 || end == -1 || start > end {
+		return 0, 0, fmt.Errorf("no JSON object found in output")
+	}
+
 	var out claudeOutput
-	if err := json.Unmarshal(data, &out); err != nil {
+	if err := json.Unmarshal(data[start:end+1], &out); err != nil {
 		return 0, 0, err
 	}
 	totalTokens := out.Usage.InputTokens + out.Usage.OutputTokens
