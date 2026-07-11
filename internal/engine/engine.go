@@ -14,14 +14,19 @@ import (
 	"github.com/precedent-cli/precedent/internal/types"
 )
 
+// EventType identifies the kind of benchmark event.
 type EventType string
 
 const (
+	// EventTaskStarted is emitted when a task begins execution.
 	EventTaskStarted    EventType = "TASK_STARTED"
+	// EventTaskFinished is emitted when a task completes execution.
 	EventTaskFinished   EventType = "TASK_FINISHED"
+	// EventBudgetExceeded is emitted when the total API cost limit is reached.
 	EventBudgetExceeded EventType = "BUDGET_EXCEEDED"
 )
 
+// Event represents an observable occurrence during the benchmark run.
 type Event struct {
 	Type       EventType
 	InstanceID string
@@ -29,11 +34,13 @@ type Event struct {
 	Message    string
 }
 
+// Engine manages the concurrent execution of benchmark tasks.
 type Engine struct {
 	cfg   Config
 	agent adapters.AgentAdapter
 }
 
+// New creates a new benchmarking Engine.
 func New(cfg Config, agent adapters.AgentAdapter) *Engine {
 	return &Engine{
 		cfg:   cfg,

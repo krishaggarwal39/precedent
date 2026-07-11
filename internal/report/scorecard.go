@@ -9,6 +9,7 @@ import (
 	"github.com/precedent-cli/precedent/internal/types"
 )
 
+// ScorecardData holds the aggregated data required to render the HTML scorecard.
 type ScorecardData struct {
 	TotalTasks    int
 	TotalCost     float64
@@ -18,6 +19,7 @@ type ScorecardData struct {
 	Date          string
 }
 
+// TaskResult pairs a benchmark task with its execution result and derived status.
 type TaskResult struct {
 	Task   types.Task
 	Result *adapters.AgentResult
