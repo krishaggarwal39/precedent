@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -26,7 +27,10 @@ var initCmd = &cobra.Command{
 		tasksDir := paths.TasksDir
 		// 🚨 Security Hardening: Ensure .precedent is gitignored
 		gitignorePath := filepath.Join(repoPath, ".gitignore")
-		gitignoreContent, _ := os.ReadFile(gitignorePath)
+		gitignoreContent, err := os.ReadFile(gitignorePath)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("reading .gitignore: %w", err)
+		}
 		if !strings.Contains(string(gitignoreContent), ".precedent/") {
 			f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err == nil {
@@ -57,8 +61,11 @@ var initCmd = &cobra.Command{
 			}
 		}
 
-		// Initialize miner (limit to 10 tasks for now)
-		taskMiner := miner.NewTaskMiner(repoPath, 10, testCmd, relaxed)
+		maxTasks, _ := cmd.Flags().GetInt("max-tasks")
+		taskTimeout, _ := cmd.Flags().GetDuration("task-timeout")
+		
+		// Initialize miner
+		taskMiner := miner.NewTaskMiner(repoPath, maxTasks, testCmd, relaxed, taskTimeout)
 		tasks, err := taskMiner.Mine(context.Background())
 		if err != nil {
 			return fmt.Errorf("mining tasks: %w", err)
@@ -91,5 +98,7 @@ var initCmd = &cobra.Command{
 func init() {
 	initCmd.Flags().String("test-cmd", "", "Command to run tests (e.g. 'npm test', 'pytest')")
 	initCmd.Flags().Bool("relaxed", false, "Skip strict fail-to-pass test validation")
+	initCmd.Flags().Int("max-tasks", 10, "Maximum number of tasks to mine (<= 0 for unlimited)")
+	initCmd.Flags().Duration("task-timeout", 10*time.Minute, "Timeout per task validation (prevent infinite test hangs)")
 	rootCmd.AddCommand(initCmd)
 }

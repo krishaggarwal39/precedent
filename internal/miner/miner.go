@@ -9,24 +9,29 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/precedent-cli/precedent/internal/runner"
 	"github.com/precedent-cli/precedent/internal/types"
 )
 
+// TaskMiner is responsible for extracting benchmark tasks from a git repository.
 type TaskMiner struct {
 	RepoPath    string
 	MaxTasks    int
 	TestCommand string
 	Relaxed     bool
+	TaskTimeout time.Duration
 }
 
-func NewTaskMiner(repoPath string, maxTasks int, testCommand string, relaxed bool) *TaskMiner {
+// NewTaskMiner creates a new TaskMiner instance with the given configuration.
+func NewTaskMiner(repoPath string, maxTasks int, testCommand string, relaxed bool, taskTimeout time.Duration) *TaskMiner {
 	return &TaskMiner{
 		RepoPath:    repoPath,
 		MaxTasks:    maxTasks,
 		TestCommand: testCommand,
 		Relaxed:     relaxed,
+		TaskTimeout: taskTimeout,
 	}
 }
 
@@ -74,6 +79,7 @@ func (m *TaskMiner) verifyFailToPass(ctx context.Context, headCommit, baseCommit
 	if err != nil {
 		return false
 	}
+	defer os.RemoveAll(wtDir)
 
 	isolation := runner.NewGitIsolation(m.RepoPath, wtDir, baseCommit)
 	if err := isolation.Setup(ctx); err != nil {
@@ -83,8 +89,11 @@ func (m *TaskMiner) verifyFailToPass(ctx context.Context, headCommit, baseCommit
 		_ = isolation.Teardown(context.Background())
 	}()
 
+	timeoutCtx, cancel := context.WithTimeout(ctx, m.TaskTimeout)
+	defer cancel()
+
 	// 1. Test BaseCommit (Must Fail)
-	testBase := exec.CommandContext(ctx, "sh", "-c", m.TestCommand)
+	testBase := exec.CommandContext(timeoutCtx, "sh", "-c", m.TestCommand)
 	testBase.Dir = wtDir
 	if err := testBase.Run(); err == nil {
 		// It passed! This means it doesn't fail-to-pass, or the tests weren't failing.
@@ -92,13 +101,13 @@ func (m *TaskMiner) verifyFailToPass(ctx context.Context, headCommit, baseCommit
 	}
 
 	// 2. Checkout HeadCommit and test (Must Pass)
-	checkoutCmd := exec.CommandContext(ctx, "git", "checkout", headCommit)
+	checkoutCmd := exec.CommandContext(timeoutCtx, "git", "checkout", headCommit)
 	checkoutCmd.Dir = wtDir
 	if err := checkoutCmd.Run(); err != nil {
 		return false
 	}
 
-	testHead := exec.CommandContext(ctx, "sh", "-c", m.TestCommand)
+	testHead := exec.CommandContext(timeoutCtx, "sh", "-c", m.TestCommand)
 	testHead.Dir = wtDir
 	if err := testHead.Run(); err != nil {
 		// It failed on the head commit too! It's a broken test or flaky test.
@@ -108,6 +117,7 @@ func (m *TaskMiner) verifyFailToPass(ctx context.Context, headCommit, baseCommit
 	return true // Verified!
 }
 
+// Mine iterates through the git history to extract and validate fail-to-pass tasks.
 func (m *TaskMiner) Mine(ctx context.Context) ([]types.Task, error) {
 	cmd := exec.CommandContext(ctx, "git", "log", "--pretty=format:COMMIT%x00%H%x00%an%x00%s%x00", "--name-only", "--no-merges", "-z")
 	cmd.Dir = m.RepoPath
@@ -122,6 +132,10 @@ func (m *TaskMiner) Mine(ctx context.Context) ([]types.Task, error) {
 	}
 
 	scanner := bufio.NewScanner(stdout)
+	const maxCapacity = 50 * 1024 * 1024 // 50MB
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
+
 	scanner.Split(func(data []byte, atEOF bool) (advance int, token []byte, err error) {
 		if atEOF && len(data) == 0 {
 			return 0, nil, nil
@@ -230,6 +244,10 @@ func (m *TaskMiner) Mine(ctx context.Context) ([]types.Task, error) {
 		}
 	}
 	processCommit()
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("failed to parse git log history: %w", err)
+	}
 
 	if err := cmd.Wait(); err != nil {
 		if m.MaxTasks <= 0 || len(tasks) < m.MaxTasks {
