@@ -25,6 +25,9 @@ func NewGitIsolation(repoPath, worktreeDir, baseCommit string) *GitIsolation {
 
 // Setup creates the worktree.
 func (g *GitIsolation) Setup(ctx context.Context) error {
+	// Clean up any leftover state from previous crashed runs
+	_ = g.Teardown(ctx)
+
 	// git worktree add --detach <dir> <commit>
 	cmd := exec.CommandContext(ctx, "git", "worktree", "add", "--detach", g.WorktreeDir, g.BaseCommit)
 	cmd.Dir = g.RepoPath
